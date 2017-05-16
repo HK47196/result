@@ -316,9 +316,9 @@ public:
     return *this;
   }
 
-  constexpr bool isErr() const noexcept { return this->validityState_ == details::ValidityState::err; }
-  constexpr bool isOk() const noexcept { return this->validityState_ == details::ValidityState::ok; }
-  constexpr explicit operator bool() const noexcept { return isOk(); }
+  constexpr bool is_err() const noexcept { return this->validityState_ == details::ValidityState::err; }
+  constexpr bool is_ok() const noexcept { return this->validityState_ == details::ValidityState::ok; }
+  constexpr explicit operator bool() const noexcept { return is_ok(); }
 
   constexpr const T& ok() const & { return get_(); }
   constexpr T& ok() & { return get_(); }
@@ -333,7 +333,7 @@ public:
   // attempt to call it by move first if we're an rvalue ref, otherwise SFINAE back to by ref.
   template <typename F, typename std::enable_if_t<details::isCallable<F(T&&)>>* = nullptr>
   constexpr Result<std::result_of_t<F(T&&)>, E> apply(F&& fn) && {
-    if (isOk()) {
+    if (is_ok()) {
       return {Ok(fn(std::move(this->contents.val)))};
     } else {
       return {Err(std::move(this->contents.err))};
@@ -342,7 +342,7 @@ public:
 
   template <typename F, typename std::enable_if_t<!details::isCallable<F(T&&)>>* = nullptr>
   constexpr Result<std::result_of_t<F(T&)>, E> apply(F&& fn) && {
-    if (isOk()) {
+    if (is_ok()) {
       return Ok(fn(this->contents.val));
     } else {
       return {Err(std::move(this->contents.err))};
@@ -356,7 +356,7 @@ public:
   constexpr Result<std::result_of_t<F(T&)>, E> apply(F&& fn) & {
     using res_t = std::result_of_t<F(T&)>;
     static_assert(!std::is_same<res_t, void>::value, "Cannot apply a function that returns void.");
-    if (isOk()) {
+    if (is_ok()) {
       return {Ok(fn(this->contents.val))};
     } else {
       return {Err(this->contents.err)};
@@ -364,10 +364,10 @@ public:
   }
 
   template <typename T2, std::enable_if_t<!details::isCallable<T2()>>* = nullptr>
-  constexpr T okOr(T2&& orVal) && {
-    static_assert(std::is_move_constructible<T>::value, "T must be move constructible to use okOr() with rvalue.");
+  constexpr T ok_or(T2&& orVal) && {
+    static_assert(std::is_move_constructible<T>::value, "T must be move constructible to use ok_or() with rvalue.");
     static_assert(std::is_convertible<T2&&, T>::value, "Provided value cannot be converted to T.");
-    if (isOk()) {
+    if (is_ok()) {
       return std::move(this->contents.val);
     } else {
       return {std::forward<T2>(orVal)};
@@ -378,11 +378,11 @@ public:
    *  Overload for callable F allowing the alternative to be computed lazily.
    */
   template <typename F, std::enable_if_t<details::isCallable<F()>>* = nullptr>
-  constexpr T okOr(F&& orFn) && {
+  constexpr T ok_or(F&& orFn) && {
     static_assert(std::is_convertible<std::result_of_t<F()>, T>::value,
                   "Alternative does not return a type convertible to T.");
-    static_assert(std::is_move_constructible<T>::value, "T must be move constructible to use okOr() with rvalue.");
-    if (isOk()) {
+    static_assert(std::is_move_constructible<T>::value, "T must be move constructible to use ok_or() with rvalue.");
+    if (is_ok()) {
       return std::move(this->contents.val);
     } else {
       return static_cast<T>(orFn());
@@ -390,10 +390,10 @@ public:
   }
 
   template <typename T2, std::enable_if_t<!details::isCallable<T2()>>* = nullptr>
-  constexpr T okOr(T2&& orVal) const & {
+  constexpr T ok_or(T2&& orVal) const & {
     static_assert(std::is_copy_constructible<T>::value, "lvalue okOr requires a copy constructible T.");
     static_assert(std::is_convertible<T2&&, T>::value, "Provided value cannot be converted to T.");
-    if (isOk()) {
+    if (is_ok()) {
       return this->contents.val;
     } else {
       return static_cast<T>(std::forward<T2>(orVal));
@@ -404,11 +404,11 @@ public:
    *  Overload for callable F allowing the alternative to be computed lazily.
    */
   template <typename F, std::enable_if_t<details::isCallable<F()>>* = nullptr>
-  constexpr T okOr(F&& orFn) const & {
+  constexpr T ok_or(F&& orFn) const & {
     static_assert(std::is_convertible<std::result_of_t<F()>, T>::value,
                   "Alternative does not return a type convertible to T.");
     static_assert(std::is_copy_constructible<T>::value, "lvalue okOr requires a copy constructible T.");
-    if (isOk()) {
+    if (is_ok()) {
       return this->contents.val;
     } else {
       return static_cast<T>(orFn());
@@ -418,7 +418,7 @@ public:
 private:
   constexpr T& get_() noexcept { return const_cast<T&>(static_cast<const Result*>(this)->get_()); }
   constexpr const T& get_(const char* msg = nullptr) const noexcept {
-    if (!(isOk())) {
+    if (!(is_ok())) {
       abort_(msg);
     }
     return this->contents.val;
@@ -426,7 +426,7 @@ private:
 
   constexpr E& getErr_() noexcept { return const_cast<E&>(static_cast<const Result*>(this)->getErr_()); }
   constexpr const E& getErr_(const char* msg = nullptr) const noexcept {
-    if (!(isErr())) {
+    if (!(is_err())) {
       abort_(msg);
     }
     return this->contents.err;
