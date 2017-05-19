@@ -20,4 +20,5 @@ int main(){
 
   std::string contents = util::as_string(fPtr).ok("Failed to read file.");
   std::printf("File contents:\n%s", contents.c_str());
+
 }
