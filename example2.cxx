@@ -10,15 +10,9 @@
 
 
 int main(){
-  auto ret = util::open("conf.ini", util::openmode::in);
-  if(!ret){
-    std::printf("Failed to load conf.ini\n");
-    return 0;
-  }
-  auto fPtr = std::move(ret.ok());
+  auto fPtr = util::open("conf.ini", util::openmode::in).ok("Failed to load conf.ini");
   std::printf("file ptr:%p\n", fPtr.get());
 
   std::string contents = util::as_string(fPtr).ok("Failed to read file.");
   std::printf("File contents:\n%s", contents.c_str());
-
 }

@@ -79,25 +79,20 @@ namespace util {
 
     template<typename T>
     struct result_wrap_t {
+    private:
       T contents;
 
-      // Move if possible, else copy.
-      using move_t =
-        std::conditional_t<std::is_move_constructible<T>::value, T&&, const T&>;
-
-      result_wrap_t(T&& rval)
-        : contents(static_cast<move_t>(rval)) {
+    public:
+      template<typename U>
+      result_wrap_t(U&& rval)
+        : contents(std::forward<U>(rval)) {
       }
 
-      operator T&() & {
+      T& get() {
         return contents;
       }
 
-      operator T &&() && {
-        return std::move(contents);
-      }
-
-      operator const T&() const & {
+      const T& get() const {
         return contents;
       }
     };
@@ -118,6 +113,18 @@ namespace util {
       result_wrap_t(T& lval)
         : contents(lval) {
       }
+
+      result_wrap_t(T&& rval)
+        : contents(rval) {
+      }
+
+      T& get() {
+        return contents.get();
+      }
+
+      const T& get() const {
+        return contents.get();
+      }
     };
 
     template<typename T>
@@ -125,6 +132,9 @@ namespace util {
       std::conditional_t<std::is_lvalue_reference<T>::value,
                          std::reference_wrapper<std::remove_reference_t<T>>,
                          T>;
+
+    // TODO: need to move a lot of logic from Result to a middle layer so
+    // BaseResult can be overloaded for constexpr  cases.
 
     template<typename T, typename E>
     struct BaseResult {
@@ -150,19 +160,14 @@ namespace util {
       } contents;
       ValidityState validityState_ = ValidityState::invalid;
 
+      explicit BaseResult()
+        : contents(dummy_t{})
+        , validityState_(ValidityState::invalid) {
+      }
+
       explicit constexpr BaseResult(dummy_t) noexcept
         : contents(dummy_t{})
-        , validityState_(ValidityState::err) {
-      }
-
-      explicit BaseResult(T&& val, ok_tag)
-        : contents(std::forward<T>(val), ok_tag{})
-        , validityState_(ValidityState::ok) {
-      }
-
-      explicit BaseResult(E&& val, err_tag)
-        : contents(std::forward<E>(val), err_tag{})
-        , validityState_(ValidityState::err) {
+        , validityState_(ValidityState::invalid) {
       }
 
       explicit constexpr BaseResult(details::EmptyWrapper) noexcept
@@ -174,7 +179,7 @@ namespace util {
         destruct();
       }
 
-      auto destruct() {
+      void destruct() {
         try {
           switch (validityState_) {
             case ValidityState::ok:
@@ -231,29 +236,68 @@ namespace util {
     using Base          = details::BaseResult<T, E>;
     using ValidityState = details::ValidityState;
 
-    using Error_T = decltype(std::declval<typename Base::contents_t>().err.contents);
-    using Ok_T    = decltype(std::declval<typename Base::contents_t>().val.contents);
+    using Error_T = std::remove_reference_t<decltype(
+      std::declval<typename Base::contents_t>().err.get())>;
+    using Ok_T    = std::remove_reference_t<decltype(
+      std::declval<typename Base::contents_t>().val.get())>;
 
-  public:
-    // TODO: DRY
-    Result& operator=(const Result& other) {
-      this->destruct();
-      this->validityState_ = other.validityState_;
-      switch (this->validityState_) {
+    using Ok_Wrap_T    = decltype(Base::contents_t::val);
+    using Error_Wrap_T = decltype(Base::contents_t::err);
+
+    template<typename U>
+    void reconstruct(U&& val, details::ok_tag) {
+      this->validityState_ = ValidityState::ok;
+      ::new (&(this->contents.val)) Ok_Wrap_T(std::forward<U>(val));
+    }
+
+    template<typename U>
+    void reconstruct(U&& val, details::err_tag) {
+      this->validityState_ = ValidityState::err;
+      ::new (&(this->contents.err)) Error_Wrap_T(std::forward<U>(val));
+    }
+
+    void copy_assign(const Result& other) {
+      switch (other.validityState_) {
         case ValidityState::ok:
-          ::new (&(this->contents.val.contents)) decltype(
-            this->contents.val.contents)(other.contents.val);
+          reconstruct(other.contents.ok(), details::ok_tag{});
           break;
         case ValidityState::err:
-          ::new (&(this->contents.err.contents)) decltype(
-            this->contents.err.contents)(other.contents.err);
+          reconstruct(other.contents.err(), details::err_tag{});
           break;
         case ValidityState::invalid:
+          // TODO: this is always a bug, right?
           std::fprintf(stderr, "BUG\n");
           std::abort();
-          // TODO: this is almost always a bug, right?
           break;
       }
+    }
+
+    void move_assign(Result&& other) {
+      switch (other.validityState_) {
+        case ValidityState::ok:
+          reconstruct(std::move(other.ok()), details::ok_tag{});
+          break;
+        case ValidityState::err:
+          reconstruct(std::move(other.err()), details::err_tag{});
+          break;
+        case ValidityState::invalid:
+          // TODO: this is always a bug, right?
+          std::fprintf(stderr, "BUG\n");
+          std::abort();
+          break;
+      }
+      // Moving a type leaves it in a valid state.
+      //
+      // other.validityState_ = ValidityState::invalid;
+    }
+
+  public:
+    Result& operator=(const Result& other) {
+      if (this == &other) {
+        return *this;
+      }
+      this->destruct();
+      copy_assign(other);
     }
 
     Result& operator=(Result&& other) {
@@ -261,75 +305,39 @@ namespace util {
         return *this;
       }
       this->destruct();
-      this->validityState_ = other.validityState_;
-      switch (this->validityState_) {
-        case ValidityState::ok:
-          ::new (&(this->contents.val.contents)) decltype(
-            this->contents.val.contents)(std::move(other.contents.val.contents));
-          break;
-        case ValidityState::err:
-          ::new (&(this->contents.err.contents)) decltype(
-            this->contents.err.contents)(std::move(other.contents.err.contents));
-          break;
-        case ValidityState::invalid:
-          std::fprintf(stderr, "BUG\n");
-          std::abort();
-          // TODO: this is almost always a bug, right?
-          break;
-      }
+      move_assign(std::move(other));
     }
 
-    Result(const Result& other)
-      : Base(details::dummy_t{}) {
-      this->validityState_ = other.validityState_;
-      switch (this->validityState_) {
-        case ValidityState::ok:
-          ::new (&(this->contents.val.contents)) decltype(
-            this->contents.val.contents)(other.contents.val);
-          break;
-        case ValidityState::err:
-          ::new (&(this->contents.err.contents)) decltype(
-            this->contents.err.contents)(other.contents.err);
-          break;
-        case ValidityState::invalid:
-          std::fprintf(stderr, "BUG\n");
-          std::abort();
-          break;
-      }
+    template<typename U>
+    Result& operator=(details::OkWrapper<U>&& val) {
+      // TODO: static_assert constraints
+      this->destruct();
+      reconstruct(std::forward<U>(val.contents), details::ok_tag{});
+      return *this;
     }
 
-    Result(Result&& other)
-      : Base(details::dummy_t{}) {
-      this->validityState_ = other.validityState_;
-      switch (this->validityState_) {
-        case ValidityState::ok:
-          ::new (&(this->contents.val.contents)) decltype(
-            this->contents.val.contents)(std::move(other.contents.val.contents));
-          break;
-        case ValidityState::err:
-          ::new (&(this->contents.err.contents)) decltype(
-            this->contents.err.contents)(std::move(other.contents.err.contents));
-          break;
-        case ValidityState::invalid:
-          std::fprintf(stderr, "BUG\n");
-          std::abort();
-          break;
-      }
+    template<typename U>
+    Result& operator=(details::ErrWrapper<U>&& val) {
+      // TODO: static_assert constraints
+      this->destruct();
+      reconstruct(std::forward<U>(val.contents), details::err_tag{});
+      return *this;
+    }
+
+    Result(const Result& other) {
+      copy_assign(other);
+    }
+
+    Result(Result&& other) {
+      move_assign(std::move(other));
     }
 
     ~Result() = default;
 
-    Result(details::OkWrapper<T>&& val)
-      : Base(std::forward<T>(val.contents), details::ok_tag{}) {
-    }
-
-    Result(details::ErrWrapper<E>&& val)
-      : Base(std::forward<E>(val.contents), details::err_tag{}) {
-    }
-
     template<typename U>
-    Result(details::OkWrapper<U>&& val)
-      : Base(static_cast<T>(val.contents), details::ok_tag{}) {
+    Result(details::OkWrapper<U>&& val) {
+      reconstruct(std::forward<U>(val.contents), details::ok_tag{});
+      // TODO: MOVE THE CONTRACTS.
 
       // Are we holding a reference T?
       // Yes? -> Doesn't matter.
@@ -348,8 +356,8 @@ namespace util {
     }
 
     template<typename U>
-    Result(details::ErrWrapper<U>&& val)
-      : Base(static_cast<E>(val.contents), details::err_tag{}) {
+    Result(details::ErrWrapper<U>&& val) {
+      reconstruct(std::forward<U>(val.contents), details::err_tag{});
       static_assert(
         (!std::is_lvalue_reference<E>::value and
          std::is_lvalue_reference<U>::value)
@@ -366,38 +374,15 @@ namespace util {
     template<
       typename U,
       std::enable_if_t<std::is_constructible<Ok_T, U&&>::value>* = nullptr>
-    Result(U&& val)
-      // [expr.static.cast], will bind to a temporary if U and T differ,
-      : Base(static_cast<T&&>(std::forward<U>(val)), details::ok_tag{}) {
-      // TODO: static_assert constraints
+    Result(U&& val) {
+      reconstruct(std::forward<U>(val), details::ok_tag{});
     }
 
     template<
       typename U,
       std::enable_if_t<std::is_constructible<Error_T, U&&>::value>* = nullptr>
-    Result(U&& val)
-      : Base(static_cast<E&&>(std::forward<U>(val)), details::err_tag{}) {
-      // TODO: static_assert constraints
-    }
-
-    template<typename U>
-    Result& operator=(details::OkWrapper<U>&& val) {
-      // TODO: static_assert constraints
-      this->destruct();
-      ::new (&(this->contents.val.contents)) decltype(
-        this->contents.val.contents)(std::forward<U>(val.contents));
-      this->validityState_ = ValidityState::ok;
-      return *this;
-    }
-
-    template<typename U>
-    Result& operator=(details::ErrWrapper<U>&& val) {
-      // TODO: static_assert constraints
-      this->destruct();
-      ::new (&(this->contents.err.contents)) decltype(
-        this->contents.err.contents)(std::forward<U>(val.contents));
-      this->validityState_ = ValidityState::err;
-      return *this;
+    Result(U&& val) {
+      reconstruct(std::forward<U>(val), details::err_tag{});
     }
 
     constexpr bool is_err() const noexcept {
@@ -414,6 +399,19 @@ namespace util {
 
     constexpr explicit operator bool() const noexcept {
       return is_ok();
+    }
+
+    // TODO
+    const T& ok_unchecked(const char* msg = nullptr) const & {
+      return get_(msg);
+    }
+
+    T& ok_unchecked(const char* msg = nullptr) & {
+      return get_(msg);
+    }
+
+    T&& ok_unchecked(const char* msg = nullptr) && {
+      return std::move(get_(msg));
     }
 
     const T& ok(const char* msg = nullptr) const & {
@@ -440,15 +438,28 @@ namespace util {
       return std::move(getErr_(msg));
     }
 
+    // TODO
+    const E& err_unchecked(const char* msg = nullptr) const & {
+      return getErr_(msg);
+    }
+
+    E& err_unchecked(const char* msg = nullptr) & {
+      return getErr_(msg);
+    }
+
+    E&& err_unchecked(const char* msg = nullptr) && {
+      return std::move(getErr_(msg));
+    }
+
     // attempt to call it by move first if we're an rvalue ref, otherwise SFINAE
     // back to by ref.
     template<typename F,
              typename std::enable_if_t<details::isCallable<F(T&&)>>* = nullptr>
     Result<std::result_of_t<F(T&&)>, E> apply(F&& fn) && {
       if (is_ok()) {
-        return {Ok(fn(std::move(this->contents.val)))};
+        return {Ok(fn(std::move(ok())))};
       } else {
-        return {Err(std::move(this->contents.err))};
+        return {Err(std::move(err()))};
       }
     }
 
@@ -456,9 +467,9 @@ namespace util {
              typename std::enable_if_t<!details::isCallable<F(T&&)>>* = nullptr>
     Result<std::result_of_t<F(T&)>, E> apply(F&& fn) && {
       if (is_ok()) {
-        return Ok(fn(this->contents.val));
+        return Ok(fn(ok()));
       } else {
-        return {Err(std::move(this->contents.err))};
+        return {Err(err())};
       }
     }
 
@@ -471,9 +482,9 @@ namespace util {
       static_assert(!std::is_same<res_t, void>::value,
                     "Cannot apply a function that returns void.");
       if (is_ok()) {
-        return {Ok(fn(this->contents.val))};
+        return {Ok(fn(ok()))};
       } else {
-        return {Err(this->contents.err)};
+        return {Err(err())};
       }
     }
 
@@ -485,7 +496,7 @@ namespace util {
       static_assert(std::is_convertible<T2&&, T>::value,
                     "Provided value cannot be converted to T.");
       if (is_ok()) {
-        return std::move(this->contents.val);
+        return std::move(ok());
       } else {
         return {std::forward<T2>(orVal)};
       }
@@ -501,7 +512,7 @@ namespace util {
       static_assert(std::is_move_constructible<T>::value,
                     "T must be move constructible to use ok_or() with rvalue.");
       if (is_ok()) {
-        return std::move(this->contents.val);
+        return std::move(ok());
       } else {
         return static_cast<T>(orFn());
       }
@@ -515,7 +526,7 @@ namespace util {
       static_assert(std::is_convertible<T2&&, T>::value,
                     "Provided value cannot be converted to T.");
       if (is_ok()) {
-        return this->contents.val;
+        return ok();
       } else {
         return static_cast<T>(std::forward<T2>(orVal));
       }
@@ -531,7 +542,7 @@ namespace util {
       static_assert(std::is_copy_constructible<T>::value,
                     "lvalue okOr requires a copy constructible T.");
       if (is_ok()) {
-        return this->contents.val;
+        return ok();
       } else {
         return static_cast<T>(orFn());
       }
@@ -540,8 +551,7 @@ namespace util {
     template<typename... Args>
     Result& context(Args&&... args) & {
       if (is_err()) {
-        static_cast<E&>(this->contents.err)
-          .context(std::forward<Args...>(args...));
+        err().context(std::forward<Args...>(args...));
       }
       return {*this};
     }
@@ -549,47 +559,44 @@ namespace util {
     template<typename... Args>
     Result&& context(Args&&... args) && {
       if (is_err()) {
-        static_cast<E&>(this->contents.err)
-          .context(std::forward<Args...>(args...));
+        err().context(std::forward<Args...>(args...));
       }
       return std::move(*this);
     }
 
-    T& operator->() {
-      return ok();
-    }
-
-    T& operator->() const {
-      return ok();
-    }
+    // T& operator->() {
+    //   return ok();
+    // }
+    //
+    // T& operator->() const {
+    //   return ok();
+    // }
 
   private:
-    T& get_(const char* msg = nullptr) noexcept {
-      if (UNLIKELY_(!(is_ok()))) {
+    void err_if_(bool b, const char* msg) const {
+      if (UNLIKELY_(b)) {
         abort_(msg);
       }
-      return this->contents.val;
+    }
+
+    T& get_(const char* msg = nullptr) noexcept {
+      err_if_(!is_ok(), msg);
+      return this->contents.val.get();
     }
 
     const T& get_(const char* msg = nullptr) const noexcept {
-      if (UNLIKELY_(!(is_ok()))) {
-        abort_(msg);
-      }
-      return this->contents.val;
+      err_if_(!is_ok(), msg);
+      return this->contents.val.get();
     }
 
     E& getErr_(const char* msg = nullptr) {
-      if (UNLIKELY_(!(is_err()))) {
-        abort_(msg);
-      }
-      return this->contents.err;
+      err_if_(!is_err(), msg);
+      return this->contents.err.get();
     }
 
     const E& getErr_(const char* msg = nullptr) const noexcept {
-      if (UNLIKELY_(!(is_err()))) {
-        abort_(msg);
-      }
-      return this->contents.err;
+      err_if_(!is_err(), msg);
+      return this->contents.err.get();
     }
 
     template<typename U>
@@ -613,16 +620,16 @@ namespace util {
 
     template<typename U = E>
     auto print_ctx() const -> std::enable_if_t<has_get_ctx<U>::value, void> {
-      static_assert(std::is_same<decltype(get_context(this->contents.err)),
-                                 const char*>::value,
-                    "get_context must return a c string");
-      std::printf("Context: %s\n", get_context(this->contents.err));
+      static_assert(
+        std::is_same<decltype(get_context(err())), const char*>::value,
+        "get_context must return a c string");
+      std::fprintf(stderr, "Context: %s\n", get_context(err()));
     }
 
     void abort_(const char* msg) const {
-      if (msg) {
-        std::fprintf(stderr, "%s\n", msg);
-      }
+      std::fprintf(stderr,
+                   "Invalid Result access, message given: %s\n",
+                   msg ? msg : "No message given.");
       if (is_err()) {
         print_ctx();
       }

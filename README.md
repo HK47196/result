@@ -8,6 +8,8 @@ implementation of the less important methods.
 
 * Appears to be unnecessary copying in ok()/err() 
 
+* option to throw an exception instead of abort on bad ok()/err()?
+
 
 ### usage:
 
@@ -70,12 +72,10 @@ lifetime of the result without requiring any copies.
 
 ### general notes:
 
-`Result<T,E>` like exceptions is **not** meant to be used for control flow. It is
-even optimized as such.
-
 Don't be afraid of using `ok()` when first writing your code. Unlike the harmful
 practice of ignoring an error code, the program will crash as loudly as possible
-if it contained an error.
+if it contained an error. This allows for rapid prototyping while making bugs
+  more apparent during testing.
 
 `Result<T,E>` (in my opinion) is meant to be dealt with at the call site. It's not
 a replacement for exceptions(don't hit me with your shoe please,) it's an
@@ -83,7 +83,11 @@ alternative. I came to this decision when studying Rust's error handling
 capabilities and their need for crates like `error_chain` to emulate what
 exceptions already do. `Result<T,E>` fills a similar role as when you'd return
 an optional(`Optional<T>` is just `Result<T,void>`.) Maybe in the future I'll
-examine something like `error_chain`'s functionality'.
+examine something like `error_chain`'s functionality'.  
+
+Thus, a `Result<T,E>` should be preferred for errors you can handle, and
+exceptions for errors that you cannot and need to propagate up the call stack.
+
 
 ### implementation notes:
 
