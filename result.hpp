@@ -275,10 +275,10 @@ namespace util {
     template<typename U>
     void reconstruct(U&& val, details::ok_tag) {
       static_assert(
-        //Check if U is an lval ref and we're not storing a reference.
+        // Check if U is an lval ref and we're not storing a reference.
         (!std::is_lvalue_reference<T>::value and
          std::is_lvalue_reference<U>::value)
-        //Yes? We need a copy constructor.
+          // Yes? We need a copy constructor.
           ? std::is_copy_constructible<std::decay_t<U>>::value
           : true,
         "Attempted to create a Result<T,E> with a move-only type by reference. "
@@ -323,9 +323,9 @@ namespace util {
           std::abort();
           break;
       }
-      // Moving a type leaves it in a valid state.
-      //
-      // other.validityState_ = ValidityState::invalid;
+      //Reset the other.
+      other.destruct();
+      other.validityState_ = ValidityState::invalid;
     }
 
   public:
@@ -495,7 +495,9 @@ namespace util {
     using apply_traits = details::apply_traits<F>;
 
     template<typename F>
-    using apply_ret_t = Result<typename apply_traits<F>::flatten_t, E>;
+    using apply_ret_t =
+      std::enable_if_t<!std::is_same<std::result_of_t<F>, void>::value,
+                       Result<typename apply_traits<F>::flatten_t, E>>;
 
   public:
     // attempt to call it by move first if we're an rvalue ref, otherwise SFINAE
@@ -526,7 +528,6 @@ namespace util {
       }
     }
 
-    // TODO: should there be an overload for void-returning functions?
     // TODO: wrapper for apply that returns the same Result<T,E> which only
     // conditionally moves if it is actually assigned.
     template<typename F,
@@ -540,6 +541,17 @@ namespace util {
       } else {
         return err();
       }
+    }
+
+    template<typename F,
+             typename std::enable_if_t<
+               details::isCallable<F(T&)> and
+               std::is_same<std::result_of_t<F(T&)>, void>::value>* = nullptr>
+    Result& apply(F&& fn) {
+      if (is_ok()) {
+        fn(ok());
+      }
+      return *this;
     }
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////
