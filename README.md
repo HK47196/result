@@ -8,30 +8,30 @@ implementation of the less important methods.
 
 * Appears to be unnecessary copying in ok()/err() 
 
-* option to throw an exception instead of abort on bad ok()/err()?
+* option to throw an exception instead of abort on bad ok()/err()? easy
+  propagation?
 
 
 ### usage:
 
+
+Here's a real example taken from example2.cxx showing the power of `Result<T,E>`:
+
 ```cpp
 
-struct IOError { //...
-  
-  void context(const char* msg){
-    //...
-  }
-};
+static void two() {
+  std::string contents = util::open("conf.ini", util::openmode::in)
+    .context("Failed to load conf.ini")
+    .apply(util::as_string)
+    .ok("Failed to read file.");
 
-extern util::`Result<const char*, IOError>` loadFile(const char*);
-
-const char* getDefaultFile();
-
-void loadConf(){
-  const char* confStr = loadFile("nonexistent conf file").ok_or(getDefaultFile());
-  //... do stuff with conf file
+  std::printf("File contents:\n%s", contents.c_str());
 }
 
 ```
+
+It makes use of the utils header which provides some adapters for the standard
+library and common functions, which is a major WIP.
 
 don't do this:
 

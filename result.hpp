@@ -15,7 +15,43 @@
 #include <utility>
 
 namespace util {
+  template<typename T, typename E>
+  struct Result;
   namespace details {
+
+    template<typename T>
+    struct is_result_impl : std::false_type {};
+
+    template<typename T, typename E>
+    struct is_result_impl<util::Result<T, E>> : std::true_type {};
+
+    template<typename T>
+    constexpr bool is_result = is_result_impl<T>::value;
+
+    template<typename T>
+    struct result_flatten {
+      using type = T;
+      //? Bad idea?
+      using Ok_T = T;
+    };
+
+    template<typename T, typename E>
+    struct result_flatten<util::Result<T, E>> {
+      using Ok_T  = typename result_flatten<T>::type;
+      using Err_T = typename result_flatten<E>::type;
+    };
+
+    template<typename F>
+    struct apply_traits {
+      using ret_t     = std::result_of_t<F>;
+      using flatten_t = typename result_flatten<ret_t>::Ok_T;
+
+      static constexpr bool is_result = details::is_result<ret_t>;
+    };
+
+    template<typename T, typename E>
+    struct result_traits {};
+
     template<class...>
     using void_t = void;
 
@@ -101,14 +137,6 @@ namespace util {
     template<typename T>
     struct result_wrap_t<T&> {
       std::reference_wrapper<T> contents;
-
-      operator T&() {
-        return contents;
-      }
-
-      operator const T&() const {
-        return contents;
-      }
 
       result_wrap_t(T& lval)
         : contents(lval) {
@@ -246,6 +274,15 @@ namespace util {
 
     template<typename U>
     void reconstruct(U&& val, details::ok_tag) {
+      static_assert(
+        //Check if U is an lval ref and we're not storing a reference.
+        (!std::is_lvalue_reference<T>::value and
+         std::is_lvalue_reference<U>::value)
+        //Yes? We need a copy constructor.
+          ? std::is_copy_constructible<std::decay_t<U>>::value
+          : true,
+        "Attempted to create a Result<T,E> with a move-only type by reference. "
+        "Did you intend to std::move() it?");
       this->validityState_ = ValidityState::ok;
       ::new (&(this->contents.val)) Ok_Wrap_T(std::forward<U>(val));
     }
@@ -298,6 +335,7 @@ namespace util {
       }
       this->destruct();
       copy_assign(other);
+      return *this;
     }
 
     Result& operator=(Result&& other) {
@@ -306,6 +344,7 @@ namespace util {
       }
       this->destruct();
       move_assign(std::move(other));
+      return *this;
     }
 
     template<typename U>
@@ -451,43 +490,63 @@ namespace util {
       return std::move(getErr_(msg));
     }
 
+  private:
+    template<typename F>
+    using apply_traits = details::apply_traits<F>;
+
+    template<typename F>
+    using apply_ret_t = Result<typename apply_traits<F>::flatten_t, E>;
+
+  public:
     // attempt to call it by move first if we're an rvalue ref, otherwise SFINAE
     // back to by ref.
+
+    /** Apply a function @p F(T) -> U mapping Result<T,E> -> Result<U,E>
+     *
+     */
     template<typename F,
              typename std::enable_if_t<details::isCallable<F(T&&)>>* = nullptr>
-    Result<std::result_of_t<F(T&&)>, E> apply(F&& fn) && {
+    apply_ret_t<F(T&&)> apply(F&& fn) && {
+      using ret_t = apply_ret_t<F(T &&)>;
       if (is_ok()) {
-        return {Ok(fn(std::move(ok())))};
+        return ret_t{fn(std::move(ok()))};
       } else {
-        return {Err(std::move(err()))};
+        return std::move(err());
       }
     }
 
     template<typename F,
              typename std::enable_if_t<!details::isCallable<F(T&&)>>* = nullptr>
-    Result<std::result_of_t<F(T&)>, E> apply(F&& fn) && {
+    apply_ret_t<F(T&)> apply(F&& fn) && {
+      using ret_t = apply_ret_t<F(T&)>;
       if (is_ok()) {
-        return Ok(fn(ok()));
+        return ret_t{fn(ok())};
       } else {
-        return {Err(err())};
+        return std::move(err());
       }
     }
 
     // TODO: should there be an overload for void-returning functions?
     // TODO: wrapper for apply that returns the same Result<T,E> which only
     // conditionally moves if it is actually assigned.
-    template<typename F>
-    Result<std::result_of_t<F(T&)>, E> apply(F&& fn) & {
-      using res_t = std::result_of_t<F(T&)>;
-      static_assert(!std::is_same<res_t, void>::value,
-                    "Cannot apply a function that returns void.");
+    template<typename F,
+             typename std::enable_if_t<details::isCallable<F(T&)>>* = nullptr>
+    apply_ret_t<F(T&)> apply(F&& fn) & {
+      using ret_t = apply_ret_t<F(T&)>;
+      // static_assert(!std::is_same<res_t, void>::value,
+      //               "Cannot apply a function that returns void.");
       if (is_ok()) {
-        return {Ok(fn(ok()))};
+        return ret_t{fn(ok())};
       } else {
-        return {Err(err())};
+        return err();
       }
     }
 
+    ////////////////////////////////////////////////////////////////////////////////////////////////////
+    //                                             OK_OR() IMPL
+    ////////////////////////////////////////////////////////////////////////////////////////////////////
+  private:
+  public:
     template<typename T2,
              std::enable_if_t<!details::isCallable<T2()>>* = nullptr>
     T ok_or(T2&& orVal) && {
