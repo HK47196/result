@@ -14,8 +14,13 @@ EXAMPLES_SOURCES = $(wildcard $(SRC_EXAMPLES_DIR)/*.cxx)
 TESTS_OBJECTS = $(TESTS_SOURCES:%.cxx=$(OBJ_DIR)/%.o)
 EXAMPLES_OBJECTS = $(EXAMPLES_SOURCES:%.cxx=$(OBJ_DIR)/%.o)
 
+#yes, this only hashes the path, I know. It's faster and safe 99% of the time.
+COMPILER_HASH := $(shell md5sum `which $(CXX)` | cut -d" " -f1 | head -c8)
+#create a unique path for each compiler.
+OBJ_DIR := $(addsuffix _$(COMPILER_HASH),$(OBJ_DIR))
+$(info foo: $(OBJ_DIR))
+
 $(shell $(CXX) --version | grep -q ^g++ ) 
-# FOOB := $(shell $(CXX)  --version ) 
 
 ifeq ($(.SHELLSTATUS),0)
 IS_GCC := 1

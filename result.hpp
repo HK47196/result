@@ -31,6 +31,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <functional>
+#include <new>
 #include <type_traits>
 #include <utility>
 
@@ -62,6 +63,7 @@ namespace util {
 
     template<typename T, typename E>
     struct result_flatten<util::Result<T, E>> {
+      // TODO: handle nested results deeper than two levels.
       using Ok_T  = typename result_flatten<T>::type;
       using Err_T = typename result_flatten<E>::type;
     };
@@ -73,9 +75,6 @@ namespace util {
 
       static constexpr bool is_result = details::is_result<ret_t>;
     };
-
-    template<typename T, typename E>
-    struct result_traits {};
 
     template<class...>
     using void_t = void;
@@ -153,15 +152,15 @@ namespace util {
     // replace T& with std::reference_wrapper<T>
     template<typename T>
     struct result_wrap_t<T&> {
+    private:
       std::reference_wrapper<T> contents;
 
+    public:
       result_wrap_t(T& lval)
         : contents(lval) {
       }
 
-      result_wrap_t(T&& rval)
-        : contents(rval) {
-      }
+      result_wrap_t(T&&) = delete;
 
       T& get() {
         return contents.get();
@@ -171,12 +170,6 @@ namespace util {
         return contents.get();
       }
     };
-
-    template<typename T>
-    using fix_ref_t =
-      std::conditional_t<std::is_lvalue_reference<T>::value,
-                         std::reference_wrapper<std::remove_reference_t<T>>,
-                         T>;
 
     // TODO: need to move a lot of logic from Result to a middle layer so
     // BaseResult can be overloaded for constexpr  cases.
@@ -339,10 +332,11 @@ namespace util {
     void move_assign(Result&& other) {
       switch (other.validityState_) {
         case ValidityState::ok:
-          reconstruct(std::move(other.ok()), details::ok_tag{});
+          // Forward because we may have reference params.
+          reconstruct(std::forward<T>(other.ok()), details::ok_tag{});
           break;
         case ValidityState::err:
-          reconstruct(std::move(other.err()), details::err_tag{});
+          reconstruct(std::forward<E>(other.err()), details::err_tag{});
           break;
         case ValidityState::invalid:
           // TODO: this is always a bug, right?
@@ -375,7 +369,7 @@ namespace util {
     }
 
     template<typename U>
-    Result& operator=(details::OkWrapper<U>&& val) {
+    Result& operator=(const details::OkWrapper<U>& val) {
       // TODO: static_assert constraints
       this->destruct();
       reconstruct(std::forward<U>(val.contents), details::ok_tag{});
@@ -383,7 +377,7 @@ namespace util {
     }
 
     template<typename U>
-    Result& operator=(details::ErrWrapper<U>&& val) {
+    Result& operator=(const details::ErrWrapper<U>& val) {
       // TODO: static_assert constraints
       this->destruct();
       reconstruct(std::forward<U>(val.contents), details::err_tag{});
@@ -509,7 +503,7 @@ namespace util {
      * Result.
      *
      */
-    template<typename F>
+    template<typename F, REQUIRES(details::isCallable<F(T&&)>)>
     apply_ret_t<F(T&&)> apply(F&& fn) && {
       if (is_ok()) {
         return fn(std::move(ok()));
@@ -564,7 +558,7 @@ namespace util {
       if (is_ok()) {
         return std::move(ok());
       } else {
-        return {std::forward<T2>(orVal)};
+        return std::forward<T2>(orVal);
       }
     }
 
