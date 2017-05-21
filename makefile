@@ -67,7 +67,7 @@ $(BIN_DIR)/tests: $(TESTS_OBJECTS) | $(BIN_DIR)/
 
 
 $(OBJ_DIR)/%.o: %.cxx | $$(@D)/
-	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -c $^ -o $@
+	$(CXX) $(CXXFLAGS) -MMD $(CPPFLAGS) -c $< -o $@
 
 # only PRECIOUS can pattern match, not SECONDARY. Old bug.
 .PRECIOUS: %/
@@ -76,6 +76,9 @@ $(OBJ_DIR)/%.o: %.cxx | $$(@D)/
 
 clean:
 	rm -rf $(BUILD_DIR)
+
+-include $(TESTS_OBJECTS:%.o=%.d)
+-include $(EXAMPLES_OBJECTS:%.o=%.d)
 
 # vim:ft=make
 #

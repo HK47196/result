@@ -8,6 +8,26 @@
 #ifndef RESULT_HPP_7LRAEJZ5
 #define RESULT_HPP_7LRAEJZ5
 
+#pragma push_macro("LIKELY")
+#undef LIKELY
+#pragma push_macro("UNLIKELY")
+#undef UNLIKELY
+
+#ifdef __GNUC__
+#define LIKELY(x) __builtin_expect(static_cast<bool>(x), true)
+#define UNLIKELY(x) __builtin_expect(static_cast<bool>(x), false)
+#else
+#define LIKELY(x) static_cast<bool>(x)
+#define UNLIKELY(x) static_cast<bool>(x)
+#endif
+
+#pragma push_macro("REQUIRES")
+#undef REQUIRES
+#define REQUIRES(...)                                                          \
+  details::unique_t<__LINE__>::type = details::unique_t<__LINE__>::type::e,    \
+  bool hiddenBool__ = true, std::enable_if_t < hiddenBool__ && (__VA_ARGS__),  \
+  int >             = 0
+
 #include <cstdio>
 #include <cstdlib>
 #include <functional>
@@ -18,6 +38,11 @@ namespace util {
   template<typename T, typename E>
   struct Result;
   namespace details {
+
+    template<int N>
+    struct unique_t {
+      enum class type { e };
+    };
 
     template<typename T>
     struct is_result_impl : std::false_type {};
@@ -96,14 +121,6 @@ namespace util {
 #else
     inline void unreachable() {
     }
-#endif
-
-#ifdef __GNUC__
-#define LIKELY_(x) __builtin_expect(static_cast<bool>(x), true)
-#define UNLIKELY_(x) __builtin_expect(static_cast<bool>(x), false)
-#else
-#define LIKELY_(x) static_cast<bool>(x)
-#define UNLIKELY_(x) static_cast<bool>(x)
 #endif
 
     struct ok_tag {};
@@ -229,6 +246,7 @@ namespace util {
         }
       }
     };
+
   } // namespace details
 
   // Lightweight wrapper just meant for return type deduction.
@@ -323,7 +341,7 @@ namespace util {
           std::abort();
           break;
       }
-      //Reset the other.
+      // Reset the other.
       other.destruct();
       other.validityState_ = ValidityState::invalid;
     }
@@ -410,16 +428,12 @@ namespace util {
       : Base(e) {
     }
 
-    template<
-      typename U,
-      std::enable_if_t<std::is_constructible<Ok_T, U&&>::value>* = nullptr>
+    template<typename U, REQUIRES(std::is_constructible<Ok_T, U&&>{})>
     Result(U&& val) {
       reconstruct(std::forward<U>(val), details::ok_tag{});
     }
 
-    template<
-      typename U,
-      std::enable_if_t<std::is_constructible<Error_T, U&&>::value>* = nullptr>
+    template<typename U, REQUIRES(std::is_constructible<Error_T, U&&>{})>
     Result(U&& val) {
       reconstruct(std::forward<U>(val), details::err_tag{});
     }
@@ -496,7 +510,8 @@ namespace util {
 
     template<typename F>
     using apply_ret_t =
-      std::enable_if_t<!std::is_same<std::result_of_t<F>, void>::value,
+      std::enable_if_t<details::isCallable<F> and
+                         !std::is_same<std::result_of_t<F>, void>::value,
                        Result<typename apply_traits<F>::flatten_t, E>>;
 
   public:
@@ -506,8 +521,7 @@ namespace util {
     /** Apply a function @p F(T) -> U mapping Result<T,E> -> Result<U,E>
      *
      */
-    template<typename F,
-             typename std::enable_if_t<details::isCallable<F(T&&)>>* = nullptr>
+    template<typename F>
     apply_ret_t<F(T&&)> apply(F&& fn) && {
       using ret_t = apply_ret_t<F(T &&)>;
       if (is_ok()) {
@@ -517,8 +531,7 @@ namespace util {
       }
     }
 
-    template<typename F,
-             typename std::enable_if_t<!details::isCallable<F(T&&)>>* = nullptr>
+    template<typename F, REQUIRES(!details::isCallable<F(T&&)>)>
     apply_ret_t<F(T&)> apply(F&& fn) && {
       using ret_t = apply_ret_t<F(T&)>;
       if (is_ok()) {
@@ -530,8 +543,7 @@ namespace util {
 
     // TODO: wrapper for apply that returns the same Result<T,E> which only
     // conditionally moves if it is actually assigned.
-    template<typename F,
-             typename std::enable_if_t<details::isCallable<F(T&)>>* = nullptr>
+    template<typename F>
     apply_ret_t<F(T&)> apply(F&& fn) & {
       using ret_t = apply_ret_t<F(T&)>;
       // static_assert(!std::is_same<res_t, void>::value,
@@ -544,9 +556,8 @@ namespace util {
     }
 
     template<typename F,
-             typename std::enable_if_t<
-               details::isCallable<F(T&)> and
-               std::is_same<std::result_of_t<F(T&)>, void>::value>* = nullptr>
+             REQUIRES(details::isCallable<F(T&)>and
+                        std::is_same<std::result_of_t<F(T&)>, void>())>
     Result& apply(F&& fn) {
       if (is_ok()) {
         fn(ok());
@@ -559,8 +570,7 @@ namespace util {
     ////////////////////////////////////////////////////////////////////////////////////////////////////
   private:
   public:
-    template<typename T2,
-             std::enable_if_t<!details::isCallable<T2()>>* = nullptr>
+    template<typename T2, REQUIRES(!details::isCallable<T2()>)>
     T ok_or(T2&& orVal) && {
       static_assert(std::is_move_constructible<T>::value,
                     "T must be move constructible to use ok_or() with rvalue.");
@@ -576,7 +586,7 @@ namespace util {
     /**
      *  Overload for callable F allowing the alternative to be computed lazily.
      */
-    template<typename F, std::enable_if_t<details::isCallable<F()>>* = nullptr>
+    template<typename F, REQUIRES(details::isCallable<F()>)>
     T ok_or(F&& orFn) && {
       static_assert(std::is_convertible<std::result_of_t<F()>, T>::value,
                     "Alternative does not return a type convertible to T.");
@@ -589,8 +599,7 @@ namespace util {
       }
     }
 
-    template<typename T2,
-             std::enable_if_t<!details::isCallable<T2()>>* = nullptr>
+    template<typename T2, REQUIRES(!details::isCallable<T2()>)>
     T ok_or(T2&& orVal) const & {
       static_assert(std::is_copy_constructible<T>::value,
                     "lvalue okOr requires a copy constructible T.");
@@ -606,7 +615,7 @@ namespace util {
     /**
      *  Overload for callable F allowing the alternative to be computed lazily.
      */
-    template<typename F, std::enable_if_t<details::isCallable<F()>>* = nullptr>
+    template<typename F, REQUIRES(details::isCallable<F()>)>
     T ok_or(F&& orFn) const & {
       static_assert(std::is_convertible<std::result_of_t<F()>, T>::value,
                     "Alternative does not return a type convertible to T.");
@@ -645,7 +654,7 @@ namespace util {
 
   private:
     void err_if_(bool b, const char* msg) const {
-      if (UNLIKELY_(b)) {
+      if (UNLIKELY(b)) {
         abort_(msg);
       }
     }
@@ -685,12 +694,12 @@ namespace util {
       static constexpr bool value = sizeof(test<E>(0)) == sizeof(Yes);
     };
 
-    template<typename U = E>
-    auto print_ctx() const -> std::enable_if_t<!has_get_ctx<U>::value, void> {
+    template<REQUIRES(!has_get_ctx<E>::value)>
+    void print_ctx() const {
     }
 
-    template<typename U = E>
-    auto print_ctx() const -> std::enable_if_t<has_get_ctx<U>::value, void> {
+    template<REQUIRES(has_get_ctx<E>::value)>
+    void print_ctx() const {
       static_assert(
         std::is_same<decltype(get_context(err())), const char*>::value,
         "get_context must return a c string");
@@ -727,6 +736,9 @@ namespace util {
   })
 } // namespace util
 
-#undef LIKELY_
-#undef UNLIKELY_
+#pragma pop_macro("LIKELY")
+#pragma pop_macro("UNLIKELY")
+#pragma pop_macro("REQUIRES")
+// #undef LIKELY
+// #undef UNLIKELY
 #endif /* end of include guard: RESULT_HPP_7LRAEJZ5 */
