@@ -370,7 +370,6 @@ namespace util {
 
     template<typename U>
     Result& operator=(const details::OkWrapper<U>& val) {
-      // TODO: static_assert constraints
       this->destruct();
       reconstruct(std::forward<U>(val.contents), details::ok_tag{});
       return *this;
@@ -378,7 +377,6 @@ namespace util {
 
     template<typename U>
     Result& operator=(const details::ErrWrapper<U>& val) {
-      // TODO: static_assert constraints
       this->destruct();
       reconstruct(std::forward<U>(val.contents), details::err_tag{});
       return *this;
@@ -483,6 +481,10 @@ namespace util {
     E&& err_unchecked(const char* msg = nullptr) && {
       return std::move(getErr_(msg));
     }
+
+    ////////////////////////////////////////////////////////////////////////////////////////////////////
+    //                                    APPLY() IMPLEMENTATION
+    ////////////////////////////////////////////////////////////////////////////////////////////////////
 
   private:
     template<typename F>
@@ -696,6 +698,16 @@ namespace util {
       details::unreachable();
     }
   };
+
+  //Provide generic interop with optional<T>
+
+  template<typename E, typename T, template<typename> class O>
+  Result<T,E> ok_or(O<T>&& opt){
+    if(opt.has_value()){
+      return *opt;
+    }
+    return Err();
+  }
 
 // rvalue ref keeps a temporary alive the same as a const ref [dcl.init.ref]
 //
