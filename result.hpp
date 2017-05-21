@@ -290,23 +290,32 @@ namespace util {
     using Ok_Wrap_T    = decltype(Base::contents_t::val);
     using Error_Wrap_T = decltype(Base::contents_t::err);
 
+    template<typename U, typename F, typename = std::true_type>
+    struct construct_contract_t {};
+
+    template<typename U, typename F>
+    struct construct_contract_t<
+      U,
+      F,
+      std::integral_constant<bool,
+                             !std::is_lvalue_reference<F>::value and
+                               std::is_lvalue_reference<U>::value>> {
+      static_assert(std::is_copy_constructible<std::decay_t<U>>::value,
+                    "Attempted to create a Result<T,E> with a move-only type"
+                    " by reference. "
+                    "Did you intend to std::move() it?");
+    };
+
     template<typename U>
-    void reconstruct(U&& val, details::ok_tag) {
-      static_assert(
-        // Check if U is an lval ref and we're not storing a reference.
-        (!std::is_lvalue_reference<T>::value and
-         std::is_lvalue_reference<U>::value)
-          // Yes? We need a copy constructor.
-          ? std::is_copy_constructible<std::decay_t<U>>::value
-          : true,
-        "Attempted to create a Result<T,E> with a move-only type by reference. "
-        "Did you intend to std::move() it?");
+    auto reconstruct(U&& val, details::ok_tag)
+      -> decltype(construct_contract_t<U, T>{}, void()) {
       this->validityState_ = ValidityState::ok;
       ::new (&(this->contents.val)) Ok_Wrap_T(std::forward<U>(val));
     }
 
     template<typename U>
-    void reconstruct(U&& val, details::err_tag) {
+    auto reconstruct(U&& val, details::err_tag)
+      -> decltype(construct_contract_t<U, E>{}, void()) {
       this->validityState_ = ValidityState::err;
       ::new (&(this->contents.err)) Error_Wrap_T(std::forward<U>(val));
     }
@@ -394,34 +403,11 @@ namespace util {
     template<typename U>
     Result(details::OkWrapper<U>&& val) {
       reconstruct(std::forward<U>(val.contents), details::ok_tag{});
-      // TODO: MOVE THE CONTRACTS.
-
-      // Are we holding a reference T?
-      // Yes? -> Doesn't matter.
-      // No? -> Is the type inside the details::OkWrapper<U>&& copy
-      // constructible?
-      //  Yes? -> Doesn't matter.
-      //  No? -> Attempted to create a non-reference Result<T,E> by non-copyable
-      //  reference.
-      static_assert(
-        (!std::is_lvalue_reference<T>::value and
-         std::is_lvalue_reference<U>::value)
-          ? std::is_copy_constructible<std::decay_t<U>>::value
-          : true,
-        "Attempted to create a Result<T,E> with a move-only type by reference. "
-        "Did you intend to std::move() it?");
     }
 
     template<typename U>
     Result(details::ErrWrapper<U>&& val) {
       reconstruct(std::forward<U>(val.contents), details::err_tag{});
-      static_assert(
-        (!std::is_lvalue_reference<E>::value and
-         std::is_lvalue_reference<U>::value)
-          ? std::is_copy_constructible<std::remove_reference_t<U>>::value
-          : true,
-        "Attempted to create a Result<T,E> with a move-only type by reference. "
-        "Did you intend to std::move() it?");
     }
 
     constexpr Result(details::EmptyWrapper e)
@@ -511,7 +497,7 @@ namespace util {
     template<typename F>
     using apply_ret_t =
       std::enable_if_t<details::isCallable<F> and
-                         !std::is_same<std::result_of_t<F>, void>::value,
+                         not std::is_same<std::result_of_t<F>, void>::value,
                        Result<typename apply_traits<F>::flatten_t, E>>;
 
   public:
@@ -519,23 +505,23 @@ namespace util {
     // back to by ref.
 
     /** Apply a function @p F(T) -> U mapping Result<T,E> -> Result<U,E>
+     *  If U is a Result such that U = Result<T2,E> then apply will flatten the
+     * Result.
      *
      */
     template<typename F>
     apply_ret_t<F(T&&)> apply(F&& fn) && {
-      using ret_t = apply_ret_t<F(T &&)>;
       if (is_ok()) {
-        return ret_t{fn(std::move(ok()))};
+        return fn(std::move(ok()));
       } else {
         return std::move(err());
       }
     }
 
-    template<typename F, REQUIRES(!details::isCallable<F(T&&)>)>
+    template<typename F, REQUIRES(not details::isCallable<F(T&&)>)>
     apply_ret_t<F(T&)> apply(F&& fn) && {
-      using ret_t = apply_ret_t<F(T&)>;
       if (is_ok()) {
-        return ret_t{fn(ok())};
+        return fn(ok());
       } else {
         return std::move(err());
       }
@@ -545,11 +531,10 @@ namespace util {
     // conditionally moves if it is actually assigned.
     template<typename F>
     apply_ret_t<F(T&)> apply(F&& fn) & {
-      using ret_t = apply_ret_t<F(T&)>;
-      // static_assert(!std::is_same<res_t, void>::value,
+      // static_assert(not std::is_same<res_t, void>::value,
       //               "Cannot apply a function that returns void.");
       if (is_ok()) {
-        return ret_t{fn(ok())};
+        return fn(ok());
       } else {
         return err();
       }
@@ -570,7 +555,7 @@ namespace util {
     ////////////////////////////////////////////////////////////////////////////////////////////////////
   private:
   public:
-    template<typename T2, REQUIRES(!details::isCallable<T2()>)>
+    template<typename T2, REQUIRES(not details::isCallable<T2()>)>
     T ok_or(T2&& orVal) && {
       static_assert(std::is_move_constructible<T>::value,
                     "T must be move constructible to use ok_or() with rvalue.");
@@ -599,7 +584,7 @@ namespace util {
       }
     }
 
-    template<typename T2, REQUIRES(!details::isCallable<T2()>)>
+    template<typename T2, REQUIRES(not details::isCallable<T2()>)>
     T ok_or(T2&& orVal) const & {
       static_assert(std::is_copy_constructible<T>::value,
                     "lvalue okOr requires a copy constructible T.");
@@ -694,7 +679,7 @@ namespace util {
       static constexpr bool value = sizeof(test<E>(0)) == sizeof(Yes);
     };
 
-    template<REQUIRES(!has_get_ctx<E>::value)>
+    template<REQUIRES(not has_get_ctx<E>::value)>
     void print_ctx() const {
     }
 
@@ -739,6 +724,4 @@ namespace util {
 #pragma pop_macro("LIKELY")
 #pragma pop_macro("UNLIKELY")
 #pragma pop_macro("REQUIRES")
-// #undef LIKELY
-// #undef UNLIKELY
 #endif /* end of include guard: RESULT_HPP_7LRAEJZ5 */

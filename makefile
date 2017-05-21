@@ -30,7 +30,6 @@ CXXFLAGS += -pipe
 
 ifeq ($(IS_GCC), 1)
 CXXFLAGS += -Wunsafe-loop-optimizations -Wlogical-op -Wduplicated-cond -Wuninitialized -gdwarf-5
-CXXFLAGS += -fvar-tracking -fvar-tracking-assignments
 endif
 
 
@@ -44,6 +43,7 @@ OBJ_DIR := $(addsuffix _debug,$(OBJ_DIR))
 else
 OBJ_DIR := $(addsuffix _release,$(OBJ_DIR))
 CXXFLAGS += -O3
+CXXFLAGS += -fvar-tracking -fvar-tracking-assignments
 endif
 
 LTO ?= 0
